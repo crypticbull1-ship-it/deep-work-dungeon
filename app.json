@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Deep Work Dungeon",
+    "slug": "deep-work-dungeon",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon-dungeon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash-icon-dungeon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#151425"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.deepworkdungeon.app",
+      "versionCode": 1,
+      "permissions": [],
+      "adaptiveIcon": {
+        "backgroundColor": "#151425",
+        "foregroundImage": "./assets/adaptive-icon-dungeon.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
