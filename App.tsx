@@ -2,12 +2,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -208,6 +208,14 @@ const outcomeStyles: Record<Outcome, 'victoryResult' | 'partialResult' | 'failed
 };
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <DungeonApp />
+    </SafeAreaProvider>
+  );
+}
+
+function DungeonApp() {
   const [userState, setUserState] = useState<UserState>(defaultUserState);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [screen, setScreen] = useState<Screen>('concept');
@@ -523,7 +531,7 @@ export default function App() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
         <View style={styles.loadingView}>
           <ActivityIndicator color="#f2c94c" size="large" />
           <Text style={styles.loadingText}>Opening the dungeon...</Text>
@@ -534,7 +542,7 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardView}
@@ -1829,7 +1837,9 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    padding: 18,
+    paddingBottom: 28,
+    paddingHorizontal: 18,
+    paddingTop: 18,
   },
   secondaryButton: {
     alignItems: 'center',
