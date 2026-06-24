@@ -2,7 +2,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -120,10 +124,13 @@ const vagueQuestTitles = new Set([
   'toilet',
 ]);
 
-const difficultyRewards: Record<Difficulty, { xp: number; gold: number }> = {
-  Easy: { xp: 50, gold: 20 },
-  Normal: { xp: 100, gold: 40 },
-  Boss: { xp: 200, gold: 80 },
+const difficultySettings: Record<
+  Difficulty,
+  { durationMinutes: number; durationSeconds: number; xp: number; gold: number }
+> = {
+  Easy: { durationMinutes: 15, durationSeconds: 15 * 60, xp: 50, gold: 20 },
+  Normal: { durationMinutes: 25, durationSeconds: 25 * 60, xp: 100, gold: 40 },
+  Boss: { durationMinutes: 45, durationSeconds: 45 * 60, xp: 200, gold: 80 },
 };
 
 const outcomeMultipliers: Record<Outcome, { xp: number; gold: number; roomCleared: boolean }> = {
@@ -193,12 +200,6 @@ const avatarOptions: Array<{ emoji: string; heroClass: HeroClass }> = [
   { emoji: '🔥', heroClass: 'Rogue' },
 ];
 
-const focusLengthOptions = [
-  { label: 'Test 10 sec', minutes: 10 / 60, seconds: 10 },
-  { label: '15 min', minutes: 15, seconds: 15 * 60 },
-  { label: '25 min', minutes: 25, seconds: 25 * 60 },
-  { label: '45 min', minutes: 45, seconds: 45 * 60 },
-];
 const difficultyOptions: Difficulty[] = ['Easy', 'Normal', 'Boss'];
 const outcomeStyles: Record<Outcome, 'victoryResult' | 'partialResult' | 'failedResult' | 'abandonedResult'> = {
   Victory: 'victoryResult',
@@ -216,6 +217,7 @@ export default function App() {
 }
 
 function DungeonApp() {
+  const insets = useSafeAreaInsets();
   const [userState, setUserState] = useState<UserState>(defaultUserState);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [screen, setScreen] = useState<Screen>('concept');
@@ -225,7 +227,6 @@ function DungeonApp() {
   const [selectedAvatar, setSelectedAvatar] = useState(avatarOptions[1]);
   const [questTitle, setQuestTitle] = useState('');
   const [winCondition, setWinCondition] = useState('');
-  const [durationSeconds, setDurationSeconds] = useState(25 * 60);
   const [difficulty, setDifficulty] = useState<Difficulty>('Normal');
   const [questError, setQuestError] = useState('');
   const [activeQuest, setActiveQuest] = useState<ActiveQuest | null>(null);
@@ -335,7 +336,6 @@ function DungeonApp() {
     setSelectedAvatar(avatarOptions[1]);
     setQuestTitle('');
     setWinCondition('');
-    setDurationSeconds(25 * 60);
     setDifficulty('Normal');
     setQuestError('');
     setActiveQuest(null);
@@ -384,7 +384,6 @@ function DungeonApp() {
     });
     setQuestTitle('');
     setWinCondition('');
-    setDurationSeconds(25 * 60);
     setDifficulty('Normal');
     setQuestError('');
     setScreen('questBoard');
@@ -393,7 +392,6 @@ function DungeonApp() {
   function openQuestBoard() {
     setQuestTitle('');
     setWinCondition('');
-    setDurationSeconds(25 * 60);
     setDifficulty('Normal');
     setQuestError('');
     setScreen('questBoard');
@@ -403,7 +401,7 @@ function DungeonApp() {
     const trimmedTitle = questTitle.trim();
     const trimmedWinCondition = winCondition.trim();
     const normalizedTitle = trimmedTitle.toLowerCase();
-    const selectedDuration = getSelectedDuration(durationSeconds);
+    const selectedDifficulty = difficultySettings[difficulty];
 
     if (trimmedTitle.length < 5) {
       setQuestError('Quest title must be at least 5 characters.');
@@ -428,15 +426,15 @@ function DungeonApp() {
     const nextQuest = {
       title: trimmedTitle,
       winCondition: trimmedWinCondition,
-      durationMinutes: selectedDuration.minutes,
-      durationSeconds: selectedDuration.seconds,
+      durationMinutes: selectedDifficulty.durationMinutes,
+      durationSeconds: selectedDifficulty.durationSeconds,
       difficulty,
       startedAt: new Date().toISOString(),
     };
 
     setQuestError('');
     setActiveQuest(nextQuest);
-    setSecondsRemaining(selectedDuration.seconds);
+    setSecondsRemaining(selectedDifficulty.durationSeconds);
     setSelectedOutcome(null);
     setResultDetails(null);
     setShowAbandonConfirm(false);
@@ -509,10 +507,6 @@ function DungeonApp() {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   }
 
-  function getSelectedDuration(seconds: number) {
-    return focusLengthOptions.find((option) => option.seconds === seconds) ?? focusLengthOptions[2];
-  }
-
   function getResultMessage(outcome: Outcome) {
     if (outcome === 'Victory') {
       return 'Room cleared. The dungeon goes deeper.';
@@ -542,12 +536,23 @@ function DungeonApp() {
   }
 
   return (
-    <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
+    <SafeAreaView edges={['top']} style={styles.safeArea}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardView}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView
+          key={screen}
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingBottom:
+                screen === 'camp' ? insets.bottom + 104 : insets.bottom + 28,
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          style={styles.screenScroll}
+        >
           {screen === 'concept' && (
             <OnboardingCard eyebrow="Deep Work Dungeon">
               <Text style={styles.heroIcon}>🚪</Text>
@@ -656,7 +661,6 @@ function DungeonApp() {
               </QuartermasterNote>
 
               <View style={styles.actionStack}>
-                <PrimaryButton label="Start Quest" onPress={openQuestBoard} />
                 <SecondaryButton label="Quest Log" onPress={() => setScreen('questLog')} />
                 <SecondaryButton label="Armory" onPress={() => setScreen('armory')} />
               </View>
@@ -713,19 +717,9 @@ function DungeonApp() {
               />
 
               <OptionGroup
-                label="Focus Length"
-                options={focusLengthOptions.map((option) => ({
-                  label: option.label,
-                  value: option.seconds,
-                }))}
-                selectedValue={durationSeconds}
-                onSelect={setDurationSeconds}
-              />
-
-              <OptionGroup
                 label="Difficulty"
                 options={difficultyOptions.map((option) => ({
-                  label: option,
+                  label: `${option} - ${difficultySettings[option].durationMinutes} min`,
                   value: option,
                 }))}
                 selectedValue={difficulty}
@@ -846,6 +840,8 @@ function DungeonApp() {
                 <Text style={styles.headerSubtitle}>Gold: 🪙 {userState.gold}</Text>
               </View>
 
+              <SecondaryButton label="Return to Camp" onPress={returnToCamp} />
+
               {userState.gold === 0 ? (
                 <View style={styles.emptyState}>
                   <Text style={styles.emptyTitle}>No gold yet.</Text>
@@ -869,7 +865,6 @@ function DungeonApp() {
                 />
               ))}
 
-              <SecondaryButton label="Return to Camp" onPress={returnToCamp} />
             </View>
           )}
 
@@ -879,6 +874,8 @@ function DungeonApp() {
                 <Text style={styles.appTitle}>Quest Log</Text>
                 <Text style={styles.headerSubtitle}>{sessions.length} recorded rooms</Text>
               </View>
+
+              <SecondaryButton label="Return to Camp" onPress={returnToCamp} />
 
               {sessions.length === 0 ? (
                 <View style={styles.emptyState}>
@@ -905,10 +902,21 @@ function DungeonApp() {
                 ))
               )}
 
-              <SecondaryButton label="Return to Camp" onPress={returnToCamp} />
             </View>
           )}
         </ScrollView>
+        {screen === 'camp' ? (
+          <View
+            style={[
+              styles.campFooter,
+              {
+                paddingBottom: insets.bottom + 12,
+              },
+            ]}
+          >
+            <PrimaryButton label="Start Quest" onPress={openQuestBoard} />
+          </View>
+        ) : null}
         <StatusBar style="light" />
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -921,7 +929,7 @@ function calculateResult(
   outcome: Outcome,
   endedAt: string,
 ) {
-  const baseRewards = difficultyRewards[activeQuest.difficulty];
+  const baseRewards = difficultySettings[activeQuest.difficulty];
   const multipliers = outcomeMultipliers[outcome];
   let xpMultiplier = multipliers.xp;
   let goldMultiplier = multipliers.gold;
@@ -1464,6 +1472,13 @@ const styles = StyleSheet.create({
   campAvatar: {
     fontSize: 42,
   },
+  campFooter: {
+    backgroundColor: '#151425',
+    borderTopColor: '#3b344d',
+    borderTopWidth: 1,
+    elevation: 8,
+    paddingHorizontal: 18,
+  },
   card: {
     backgroundColor: '#211b33',
     borderColor: '#4a405f',
@@ -1835,9 +1850,11 @@ const styles = StyleSheet.create({
     gap: 16,
     width: '100%',
   },
+  screenScroll: {
+    flex: 1,
+  },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 28,
     paddingHorizontal: 18,
     paddingTop: 18,
   },
