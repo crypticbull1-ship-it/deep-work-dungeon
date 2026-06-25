@@ -236,6 +236,9 @@ function DungeonApp() {
   const [resultDetails, setResultDetails] = useState<ResultDetails | null>(null);
   const [campNotice, setCampNotice] = useState('');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const showBottomGutter = screen === 'armory' || screen === 'questLog';
+  const bottomGutterHeight = getBottomGutterHeight(insets.bottom);
+  const scrollBottomSpacer = getScrollBottomSpacer(screen, insets.bottom);
 
   useEffect(() => {
     void loadPersistedState();
@@ -546,8 +549,7 @@ function DungeonApp() {
           contentContainerStyle={[
             styles.scrollContent,
             {
-              paddingBottom:
-                screen === 'camp' ? insets.bottom + 104 : insets.bottom + 28,
+              paddingBottom: scrollBottomSpacer,
             },
           ]}
           keyboardShouldPersistTaps="handled"
@@ -917,6 +919,12 @@ function DungeonApp() {
             <PrimaryButton label="Start Quest" onPress={openQuestBoard} />
           </View>
         ) : null}
+        {showBottomGutter ? (
+          <View
+            pointerEvents="none"
+            style={[styles.bottomSafeAreaGutter, { height: bottomGutterHeight }]}
+          />
+        ) : null}
         <StatusBar style="light" />
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -1024,6 +1032,22 @@ function calculateResult(
   };
 
   return { details, nextUserState, session };
+}
+
+function getBottomGutterHeight(bottomInset: number) {
+  return bottomInset + 36;
+}
+
+function getScrollBottomSpacer(screen: Screen, bottomInset: number) {
+  if (screen === 'camp') {
+    return bottomInset + 104;
+  }
+
+  if (screen === 'armory' || screen === 'questLog') {
+    return getBottomGutterHeight(bottomInset) + 36;
+  }
+
+  return bottomInset + 28;
 }
 
 function parseStoredUserState(value: string): UserState {
@@ -1468,6 +1492,15 @@ const styles = StyleSheet.create({
   buttonPressed: {
     opacity: 0.82,
     transform: [{ scale: 0.99 }],
+  },
+  bottomSafeAreaGutter: {
+    backgroundColor: '#151425',
+    bottom: 0,
+    elevation: 10,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    zIndex: 10,
   },
   campAvatar: {
     fontSize: 42,
