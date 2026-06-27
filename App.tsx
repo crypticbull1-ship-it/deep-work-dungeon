@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as StoreReview from 'expo-store-review';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -34,6 +35,7 @@ type Screen =
 type Difficulty = 'Easy' | 'Normal' | 'Boss';
 type Outcome = 'Victory' | 'Partial' | 'Failed' | 'Abandoned';
 type UpgradeId = 'sharperFocus' | 'goldFinder' | 'streakShield' | 'bossHunter';
+type ReviewMilestone = 'firstFloorCleared' | 'firstBossVictory' | 'firstThreeDayStreak';
 
 type UserState = {
   onboardingComplete: boolean;
@@ -49,6 +51,10 @@ type UserState = {
   currentFloor: number;
   roomsClearedOnFloor: number;
   heroHp: number;
+  classVictoryCount: number;
+  lastReviewPromptDate: string | null;
+  reviewPromptCount: number;
+  reviewMilestonesPrompted: Record<ReviewMilestone, boolean>;
   upgrades: {
     sharperFocus: number;
     goldFinder: number;
@@ -95,6 +101,7 @@ type ResultDetails = {
   roomsAfter: number;
   hpBefore: number;
   hpAfter: number;
+  classBonusLines: string[];
 };
 
 type UpgradeDefinition = {
@@ -110,9 +117,24 @@ type StreakCheckResult = {
   notice: string;
 };
 
+type ClassDefinition = {
+  emoji: string;
+  heroClass: HeroClass;
+  abilityName: string;
+  abilityText: string;
+};
+
+type QuestTemplate = {
+  name: string;
+  questTitle: string;
+  winCondition: string;
+};
+
 const USER_STORAGE_KEY = 'deepWorkDungeon:userState';
 const SESSION_STORAGE_KEY = 'deepWorkDungeon:sessions';
 const roomsPerFloor = 5;
+const reviewCooldownDays = 45;
+const maxReviewPrompts = 3;
 
 const vagueQuestTitles = new Set([
   'work',
@@ -139,6 +161,72 @@ const outcomeMultipliers: Record<Outcome, { xp: number; gold: number; roomCleare
   Failed: { xp: 0, gold: 0, roomCleared: false },
   Abandoned: { xp: 0, gold: 0, roomCleared: false },
 };
+
+const defaultReviewMilestonesPrompted: Record<ReviewMilestone, boolean> = {
+  firstFloorCleared: false,
+  firstBossVictory: false,
+  firstThreeDayStreak: false,
+};
+
+const classDefinitions: Record<HeroClass, ClassDefinition> = {
+  Mage: {
+    emoji: '🧙',
+    heroClass: 'Mage',
+    abilityName: 'Arcane Focus',
+    abilityText: '+10% XP from Victory runs.',
+  },
+  Knight: {
+    emoji: '🛡️',
+    heroClass: 'Knight',
+    abilityName: 'Iron Will',
+    abilityText: 'Failed loses 5 HP. Abandoned loses 10 HP.',
+  },
+  Ranger: {
+    emoji: '🏹',
+    heroClass: 'Ranger',
+    abilityName: 'Pathfinder',
+    abilityText: 'Every 4th Victory clears +1 bonus room.',
+  },
+  Rogue: {
+    emoji: '🔥',
+    heroClass: 'Rogue',
+    abilityName: 'Salvage Instinct',
+    abilityText: 'Partial gives 50% XP and 40% gold.',
+  },
+};
+
+const questTemplates: QuestTemplate[] = [
+  {
+    name: 'Writing',
+    questTitle: 'Write one rough draft',
+    winCondition: 'At least 150 words exist by the end',
+  },
+  {
+    name: 'Studying',
+    questTitle: 'Study one section',
+    winCondition: 'Read one section and write 3 notes',
+  },
+  {
+    name: 'Coding',
+    questTitle: 'Fix one coding task',
+    winCondition: 'One bug fixed or one component improved',
+  },
+  {
+    name: 'Outreach',
+    questTitle: 'Complete outreach block',
+    winCondition: 'Send or prepare 5 real outreach messages',
+  },
+  {
+    name: 'Admin Cleanup',
+    questTitle: 'Clear admin task',
+    winCondition: 'One inbox, file, or form cleanup completed',
+  },
+  {
+    name: 'Reading',
+    questTitle: 'Read and capture notes',
+    winCondition: 'Read 10 pages and write 3 notes',
+  },
+];
 
 const upgradeDefinitions: UpgradeDefinition[] = [
   {
@@ -185,6 +273,10 @@ const defaultUserState: UserState = {
   currentFloor: 1,
   roomsClearedOnFloor: 0,
   heroHp: 100,
+  classVictoryCount: 0,
+  lastReviewPromptDate: null,
+  reviewPromptCount: 0,
+  reviewMilestonesPrompted: defaultReviewMilestonesPrompted,
   upgrades: {
     sharperFocus: 0,
     goldFinder: 0,
@@ -236,7 +328,9 @@ function DungeonApp() {
   const [resultDetails, setResultDetails] = useState<ResultDetails | null>(null);
   const [campNotice, setCampNotice] = useState('');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [pendingReviewMilestone, setPendingReviewMilestone] = useState<ReviewMilestone | null>(null);
   const showBottomGutter = screen === 'armory' || screen === 'questLog';
+  const showFixedActionFooter = screen === 'camp' || screen === 'questBoard';
   const bottomGutterHeight = getBottomGutterHeight(insets.bottom);
   const scrollBottomSpacer = getScrollBottomSpacer(screen, insets.bottom);
 
@@ -275,6 +369,7 @@ function DungeonApp() {
   const runProgress = totalSeconds > 0 ? elapsedSeconds / totalSeconds : 0;
   const enemyHp = Math.max(0, Math.ceil(100 - runProgress * 100));
   const focusPercent = Math.min(100, Math.round(runProgress * 100));
+  const activeClass = classDefinitions[userState.heroClass ?? 'Knight'];
 
   async function loadPersistedState() {
     try {
@@ -348,6 +443,7 @@ function DungeonApp() {
     setResultDetails(null);
     setCampNotice('');
     setShowResetConfirm(false);
+    setPendingReviewMilestone(null);
   }
 
   function continueFromHeroName() {
@@ -369,20 +465,24 @@ function DungeonApp() {
   }
 
   function continueFromAvatar() {
+    const selectedClass = classDefinitions[selectedAvatar.heroClass];
     void persistUserState({
       ...userState,
-      avatarEmoji: selectedAvatar.emoji,
+      avatarEmoji: selectedClass.emoji,
       heroClass: selectedAvatar.heroClass,
+      classVictoryCount: 0,
     });
     setScreen('quartermaster');
   }
 
   function completeOnboarding() {
+    const selectedClass = classDefinitions[selectedAvatar.heroClass];
     void persistUserState({
       ...userState,
       heroName: heroNameInput.trim(),
-      avatarEmoji: selectedAvatar.emoji,
+      avatarEmoji: selectedClass.emoji,
       heroClass: selectedAvatar.heroClass,
+      classVictoryCount: 0,
       onboardingComplete: true,
     });
     setQuestTitle('');
@@ -398,6 +498,27 @@ function DungeonApp() {
     setDifficulty('Normal');
     setQuestError('');
     setScreen('questBoard');
+  }
+
+  function applyQuestTemplate(template: QuestTemplate) {
+    setQuestTitle(template.questTitle);
+    setWinCondition(template.winCondition);
+    setQuestError('');
+  }
+
+  function changeHeroClass(nextClass: HeroClass) {
+    const definition = classDefinitions[nextClass];
+    const nextState = {
+      ...userState,
+      avatarEmoji: definition.emoji,
+      heroClass: nextClass,
+      classVictoryCount: 0,
+    };
+    setSelectedAvatar({
+      emoji: definition.emoji,
+      heroClass: nextClass,
+    });
+    void persistUserState(nextState);
   }
 
   function enterDungeon() {
@@ -461,16 +582,24 @@ function DungeonApp() {
 
     setSelectedOutcome(outcome);
     setResultDetails(calculation.details);
+    setPendingReviewMilestone(
+      getReviewMilestone(userState, calculation.nextUserState, activeQuest, outcome),
+    );
     await Promise.all([persistUserState(calculation.nextUserState), persistSessions(nextSessions)]);
     setScreen('roomResult');
   }
 
   function returnToCamp() {
+    const reviewMilestone = pendingReviewMilestone;
     setActiveQuest(null);
     setSelectedOutcome(null);
     setResultDetails(null);
     setShowAbandonConfirm(false);
+    setPendingReviewMilestone(null);
     setScreen('camp');
+    if (reviewMilestone) {
+      void maybeRequestReview(reviewMilestone);
+    }
   }
 
   function purchaseUpgrade(upgrade: UpgradeDefinition) {
@@ -502,6 +631,36 @@ function DungeonApp() {
     const streakCheck = checkMissedDayStreak(simulatedState, new Date());
     setCampNotice(streakCheck.notice || 'DEV TEST: missed-day check found no streak change.');
     void persistUserState(streakCheck.nextState);
+  }
+
+  async function maybeRequestReview(milestone: ReviewMilestone) {
+    try {
+      const storedUserValue = await AsyncStorage.getItem(USER_STORAGE_KEY);
+      const latestState = storedUserValue ? parseStoredUserState(storedUserValue) : userState;
+
+      if (!canPromptForReview(latestState, milestone, new Date())) {
+        return;
+      }
+
+      const isAvailable = await StoreReview.isAvailableAsync();
+      if (!isAvailable) {
+        return;
+      }
+
+      await StoreReview.requestReview();
+      const nextState = {
+        ...latestState,
+        lastReviewPromptDate: getLocalDateString(new Date()),
+        reviewPromptCount: latestState.reviewPromptCount + 1,
+        reviewMilestonesPrompted: {
+          ...latestState.reviewMilestonesPrompted,
+          [milestone]: true,
+        },
+      };
+      await persistUserState(nextState);
+    } catch {
+      // Native review prompting is opportunistic; unavailable review support should stay invisible.
+    }
   }
 
   function formatTime(totalSecondsToFormat: number) {
@@ -568,6 +727,13 @@ function DungeonApp() {
 
           {screen === 'heroName' && (
             <OnboardingCard eyebrow="Hero Setup">
+              <View style={styles.sceneBanner}>
+                <Text style={styles.sceneIcon}>🏰</Text>
+                <View style={styles.sceneCopy}>
+                  <Text style={styles.sceneTitle}>Name the hero at the gate.</Text>
+                  <Text style={styles.sceneText}>The dungeon remembers clean victories.</Text>
+                </View>
+              </View>
               <Text style={styles.title}>What should the dungeon call you?</Text>
               <TextInput
                 autoCapitalize="words"
@@ -589,14 +755,21 @@ function DungeonApp() {
               <View style={styles.avatarGrid}>
                 {avatarOptions.map((option) => {
                   const isSelected = option.heroClass === selectedAvatar.heroClass;
+                  const classInfo = classDefinitions[option.heroClass];
                   return (
                     <Pressable
                       key={option.heroClass}
                       onPress={() => setSelectedAvatar(option)}
-                      style={[styles.avatarOption, isSelected && styles.avatarOptionSelected]}
+                      style={[
+                        styles.avatarOption,
+                        getClassCardStyle(option.heroClass),
+                        isSelected && styles.avatarOptionSelected,
+                      ]}
                     >
-                      <Text style={styles.avatarEmoji}>{option.emoji}</Text>
+                      <Text style={styles.avatarEmoji}>{classInfo.emoji}</Text>
                       <Text style={styles.avatarLabel}>{option.heroClass}</Text>
+                      <Text style={styles.abilityName}>{classInfo.abilityName}</Text>
+                      <Text style={styles.abilityText}>{classInfo.abilityText}</Text>
                     </Pressable>
                   );
                 })}
@@ -630,10 +803,37 @@ function DungeonApp() {
                     Hero: {userState.heroName ?? 'Unnamed'} the {userState.heroClass ?? 'Knight'}
                   </Text>
                   <Text style={styles.statLine}>Level {userState.level}</Text>
+                  <Text style={styles.classAbilityText}>
+                    {activeClass.abilityName}: {activeClass.abilityText}
+                  </Text>
                 </View>
               </View>
 
-              <StatCard label="XP" value={`${userState.xp} / ${xpRequired}`}>
+              <View style={styles.classChangePanel}>
+                <Text style={styles.optionLabel}>Class</Text>
+                <View style={styles.classPillRow}>
+                  {avatarOptions.map((option) => {
+                    const classInfo = classDefinitions[option.heroClass];
+                    const isSelected = option.heroClass === (userState.heroClass ?? 'Knight');
+                    return (
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={isSelected}
+                        key={option.heroClass}
+                        onPress={() => changeHeroClass(option.heroClass)}
+                        style={[styles.classPill, isSelected && styles.classPillSelected]}
+                      >
+                        <Text style={styles.classPillText}>
+                          {classInfo.emoji} {option.heroClass}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.subtleText}>Class changes apply to future sessions.</Text>
+              </View>
+
+              <StatCard label="XP to Next Level" value={`${userState.xp} / ${xpRequired}`}>
                 <View style={styles.progressTrack}>
                   <View style={[styles.progressFill, { width: `${xpPercent}%` }]} />
                 </View>
@@ -700,6 +900,26 @@ function DungeonApp() {
                 <Text style={styles.headerSubtitle}>Define victory before entering the room.</Text>
               </View>
 
+              <View style={styles.prepPanel}>
+                <Text style={styles.panelTitle}>Prepare the Room</Text>
+                <Text style={styles.subtleText}>Pick a template or write your own quest.</Text>
+                <View style={styles.templateGrid}>
+                  {questTemplates.map((template) => (
+                    <Pressable
+                      accessibilityRole="button"
+                      key={template.name}
+                      onPress={() => applyQuestTemplate(template)}
+                      style={({ pressed }) => [
+                        styles.templateChip,
+                        pressed && styles.buttonPressed,
+                      ]}
+                    >
+                      <Text style={styles.templateText}>{template.name}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
               <TextInput
                 autoCapitalize="sentences"
                 onChangeText={setQuestTitle}
@@ -735,10 +955,7 @@ function DungeonApp() {
                 start.
               </QuartermasterNote>
 
-              <View style={styles.actionStack}>
-                <PrimaryButton label="Enter Dungeon" onPress={enterDungeon} />
-                <SecondaryButton label="Return to Camp" onPress={returnToCamp} />
-              </View>
+              <SecondaryButton label="Return to Camp" onPress={returnToCamp} />
             </View>
           )}
 
@@ -747,9 +964,13 @@ function DungeonApp() {
               <View style={styles.dungeonHeader}>
                 <Text style={styles.headerSubtitle}>Dungeon Run</Text>
                 <Text style={styles.timerText}>{formatTime(secondsRemaining)}</Text>
+                <Text style={styles.subtleText}>{activeQuest.difficulty} room • no pause</Text>
               </View>
 
               <View style={styles.roomCard}>
+                <View style={styles.roomDoor}>
+                  <Text style={styles.roomDoorText}>ROOM IN PROGRESS</Text>
+                </View>
                 <View style={styles.combatRow}>
                   <View style={styles.combatant}>
                     <Text style={styles.combatEmoji}>{userState.avatarEmoji ?? '🛡️'}</Text>
@@ -764,8 +985,12 @@ function DungeonApp() {
                   </View>
                 </View>
 
-                <Text style={styles.questTitle}>{activeQuest.title}</Text>
-                <Text style={styles.winCondition}>{activeQuest.winCondition}</Text>
+                <Text style={[styles.questTitle, styles.dungeonQuestTitle]}>
+                  {activeQuest.title}
+                </Text>
+                <Text style={[styles.winCondition, styles.dungeonWinCondition]}>
+                  {activeQuest.winCondition}
+                </Text>
 
                 <Meter label="Enemy HP" value={enemyHp} tone="danger" />
                 <Meter label="Focus Meter" value={focusPercent} tone="focus" />
@@ -844,6 +1069,14 @@ function DungeonApp() {
 
               <SecondaryButton label="Return to Camp" onPress={returnToCamp} />
 
+              <View style={styles.sceneBanner}>
+                <Text style={styles.sceneIcon}>⚒️</Text>
+                <View style={styles.sceneCopy}>
+                  <Text style={styles.sceneTitle}>Upgrade future runs.</Text>
+                  <Text style={styles.sceneText}>Gold becomes tools. Tools become deeper rooms.</Text>
+                </View>
+              </View>
+
               {userState.gold === 0 ? (
                 <View style={styles.emptyState}>
                   <Text style={styles.emptyTitle}>No gold yet.</Text>
@@ -879,6 +1112,14 @@ function DungeonApp() {
 
               <SecondaryButton label="Return to Camp" onPress={returnToCamp} />
 
+              <View style={styles.sceneBanner}>
+                <Text style={styles.sceneIcon}>📜</Text>
+                <View style={styles.sceneCopy}>
+                  <Text style={styles.sceneTitle}>Rooms remembered.</Text>
+                  <Text style={styles.sceneText}>Newest records stay at the top.</Text>
+                </View>
+              </View>
+
               {sessions.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Text style={styles.emptyTitle}>No rooms recorded yet.</Text>
@@ -907,16 +1148,20 @@ function DungeonApp() {
             </View>
           )}
         </ScrollView>
-        {screen === 'camp' ? (
+        {showFixedActionFooter ? (
           <View
             style={[
-              styles.campFooter,
+              styles.safeActionFooter,
               {
                 paddingBottom: insets.bottom + 12,
               },
             ]}
           >
-            <PrimaryButton label="Start Quest" onPress={openQuestBoard} />
+            {screen === 'camp' ? (
+              <PrimaryButton label="Start Quest" onPress={openQuestBoard} />
+            ) : (
+              <PrimaryButton label="Enter Dungeon" onPress={enterDungeon} />
+            )}
           </View>
         ) : null}
         {showBottomGutter ? (
@@ -939,9 +1184,22 @@ function calculateResult(
 ) {
   const baseRewards = difficultySettings[activeQuest.difficulty];
   const multipliers = outcomeMultipliers[outcome];
+  const heroClass = currentUserState.heroClass ?? 'Knight';
+  const classBonusLines: string[] = [];
   let xpMultiplier = multipliers.xp;
   let goldMultiplier = multipliers.gold;
+
+  if (outcome === 'Partial' && heroClass === 'Rogue') {
+    xpMultiplier = 0.5;
+    goldMultiplier = 0.4;
+    classBonusLines.push('Salvage Instinct improved Partial rewards.');
+  }
+
   if (outcome === 'Victory') {
+    if (heroClass === 'Mage') {
+      xpMultiplier += 0.1;
+      classBonusLines.push('Arcane Focus added +10% Victory XP.');
+    }
     if (currentUserState.upgrades.sharperFocus > 0) {
       xpMultiplier += 0.1;
     }
@@ -964,8 +1222,16 @@ function calculateResult(
     nextLevel += 1;
   }
 
+  const nextClassVictoryCount =
+    outcome === 'Victory' ? currentUserState.classVictoryCount + 1 : currentUserState.classVictoryCount;
+  const rangerBonusRooms =
+    heroClass === 'Ranger' && outcome === 'Victory' && nextClassVictoryCount % 4 === 0 ? 1 : 0;
+  if (rangerBonusRooms > 0) {
+    classBonusLines.push('Pathfinder cleared +1 bonus room.');
+  }
+
   let nextFloor = currentUserState.currentFloor;
-  let nextRooms = currentUserState.roomsClearedOnFloor + (roomCleared ? 1 : 0);
+  let nextRooms = currentUserState.roomsClearedOnFloor + (roomCleared ? 1 + rangerBonusRooms : 0);
   while (nextRooms >= roomsPerFloor) {
     nextRooms -= roomsPerFloor;
     nextFloor += 1;
@@ -982,9 +1248,17 @@ function calculateResult(
   if (outcome === 'Victory') {
     nextHp = Math.min(100, nextHp + 5);
   } else if (outcome === 'Failed') {
-    nextHp = Math.max(0, nextHp - 10);
+    const hpLoss = heroClass === 'Knight' ? 5 : 10;
+    if (heroClass === 'Knight') {
+      classBonusLines.push('Iron Will reduced Failed HP loss.');
+    }
+    nextHp = Math.max(0, nextHp - hpLoss);
   } else if (outcome === 'Abandoned') {
-    nextHp = Math.max(0, nextHp - 20);
+    const hpLoss = heroClass === 'Knight' ? 10 : 20;
+    if (heroClass === 'Knight') {
+      classBonusLines.push('Iron Will reduced Abandoned HP loss.');
+    }
+    nextHp = Math.max(0, nextHp - hpLoss);
   }
 
   const nextUserState: UserState = {
@@ -998,6 +1272,7 @@ function calculateResult(
     currentFloor: nextFloor,
     roomsClearedOnFloor: nextRooms,
     heroHp: nextHp,
+    classVictoryCount: nextClassVictoryCount,
   };
 
   const session: SessionRecord = {
@@ -1029,6 +1304,7 @@ function calculateResult(
     roomsAfter: nextRooms,
     hpBefore: currentUserState.heroHp,
     hpAfter: nextHp,
+    classBonusLines,
   };
 
   return { details, nextUserState, session };
@@ -1039,7 +1315,7 @@ function getBottomGutterHeight(bottomInset: number) {
 }
 
 function getScrollBottomSpacer(screen: Screen, bottomInset: number) {
-  if (screen === 'camp') {
+  if (screen === 'camp' || screen === 'questBoard') {
     return bottomInset + 104;
   }
 
@@ -1048,6 +1324,74 @@ function getScrollBottomSpacer(screen: Screen, bottomInset: number) {
   }
 
   return bottomInset + 28;
+}
+
+function getClassCardStyle(heroClass: HeroClass) {
+  if (heroClass === 'Mage') {
+    return styles.mageClassCard;
+  }
+
+  if (heroClass === 'Knight') {
+    return styles.knightClassCard;
+  }
+
+  if (heroClass === 'Ranger') {
+    return styles.rangerClassCard;
+  }
+
+  return styles.rogueClassCard;
+}
+
+function getReviewMilestone(
+  previousState: UserState,
+  nextState: UserState,
+  activeQuest: ActiveQuest,
+  outcome: Outcome,
+): ReviewMilestone | null {
+  if (outcome !== 'Victory') {
+    return null;
+  }
+
+  if (
+    nextState.currentFloor > previousState.currentFloor &&
+    !previousState.reviewMilestonesPrompted.firstFloorCleared
+  ) {
+    return 'firstFloorCleared';
+  }
+
+  if (
+    activeQuest.difficulty === 'Boss' &&
+    !previousState.reviewMilestonesPrompted.firstBossVictory
+  ) {
+    return 'firstBossVictory';
+  }
+
+  if (
+    previousState.currentStreak < 3 &&
+    nextState.currentStreak >= 3 &&
+    !previousState.reviewMilestonesPrompted.firstThreeDayStreak
+  ) {
+    return 'firstThreeDayStreak';
+  }
+
+  return null;
+}
+
+function canPromptForReview(userState: UserState, milestone: ReviewMilestone, now: Date) {
+  if (userState.reviewMilestonesPrompted[milestone]) {
+    return false;
+  }
+
+  if (userState.reviewPromptCount >= maxReviewPrompts) {
+    return false;
+  }
+
+  if (!userState.lastReviewPromptDate) {
+    return true;
+  }
+
+  const earliestNextPrompt = shiftLocalDate(userState.lastReviewPromptDate, reviewCooldownDays);
+  return getLocalDateString(now) >= earliestNextPrompt;
 }
 
 function parseStoredUserState(value: string): UserState {
@@ -1079,12 +1423,26 @@ function normalizeUserState(value: Partial<UserState>): UserState {
       normalizeNumber(value.roomsClearedOnFloor, defaultUserState.roomsClearedOnFloor, 0),
     ),
     heroHp: Math.min(100, normalizeNumber(value.heroHp, defaultUserState.heroHp, 0)),
+    classVictoryCount: normalizeNumber(value.classVictoryCount, 0, 0),
+    lastReviewPromptDate:
+      typeof value.lastReviewPromptDate === 'string' ? value.lastReviewPromptDate : null,
+    reviewPromptCount: normalizeNumber(value.reviewPromptCount, 0, 0),
+    reviewMilestonesPrompted: normalizeReviewMilestones(value.reviewMilestonesPrompted),
     upgrades: {
       sharperFocus: normalizeNumber(value.upgrades?.sharperFocus, 0, 0),
       goldFinder: normalizeNumber(value.upgrades?.goldFinder, 0, 0),
       streakShield: normalizeNumber(value.upgrades?.streakShield, 0, 0),
       bossHunter: normalizeNumber(value.upgrades?.bossHunter, 0, 0),
     },
+  };
+}
+
+function normalizeReviewMilestones(value: unknown): Record<ReviewMilestone, boolean> {
+  const record = value && typeof value === 'object' ? (value as Partial<Record<ReviewMilestone, boolean>>) : {};
+  return {
+    firstFloorCleared: record.firstFloorCleared === true,
+    firstBossVictory: record.firstBossVictory === true,
+    firstThreeDayStreak: record.firstThreeDayStreak === true,
   };
 }
 
@@ -1272,6 +1630,9 @@ function ResultDetailsList({ details }: { details: ResultDetails }) {
       <ResultLine label="Streak" value={streakText} />
       <ResultLine label="Floor Progress" value={floorText} />
       <ResultLine label="Hero HP" value={`${details.hpBefore} -> ${details.hpAfter}`} />
+      {details.classBonusLines.map((line) => (
+        <ResultLine key={line} label="Class Bonus" value={line} />
+      ))}
     </View>
   );
 }
@@ -1288,7 +1649,7 @@ function ResultLine({ label, value }: { label: string; value: string }) {
 function LogField({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.logField}>
-      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={styles.logFieldLabel}>{label}</Text>
       <Text style={styles.logValue}>{value}</Text>
     </View>
   );
@@ -1318,8 +1679,8 @@ function UpgradeCard({
         <Text style={styles.upgradeCost}>🪙 {upgrade.cost}</Text>
       </View>
       <View style={styles.upgradeMetaRow}>
-        <Text style={styles.statLabel}>Owned: {ownedCount}</Text>
-        <Text style={styles.statLabel}>
+        <Text style={styles.upgradeMetaText}>Owned: {ownedCount}</Text>
+        <Text style={styles.upgradeMetaText}>
           Max: {upgrade.maxPurchase === null ? 'Stackable' : upgrade.maxPurchase}
         </Text>
       </View>
@@ -1449,9 +1810,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   appTitle: {
-    color: '#f7e7bd',
+    color: '#fff1c8',
     fontSize: 28,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   avatarEmoji: {
     fontSize: 32,
@@ -1464,26 +1825,26 @@ const styles = StyleSheet.create({
     marginVertical: 12,
   },
   avatarLabel: {
-    color: '#f7e7bd',
-    fontSize: 15,
-    fontWeight: '700',
+    color: '#fff3cf',
+    fontSize: 16,
+    fontWeight: '900',
   },
   avatarOption: {
-    alignItems: 'center',
-    backgroundColor: '#2a2440',
-    borderColor: '#514a69',
+    alignItems: 'flex-start',
+    backgroundColor: '#172235',
+    borderColor: '#7b6637',
     borderRadius: 8,
-    borderWidth: 1,
-    minHeight: 98,
+    borderWidth: 2,
+    minHeight: 154,
     padding: 14,
     width: '47%',
   },
   avatarOptionSelected: {
-    backgroundColor: '#443164',
-    borderColor: '#f2c94c',
+    backgroundColor: '#26395a',
+    borderColor: '#f5c24b',
   },
   bodyText: {
-    color: '#d9ccb5',
+    color: '#142033',
     fontSize: 17,
     lineHeight: 25,
     marginBottom: 24,
@@ -1494,7 +1855,7 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.99 }],
   },
   bottomSafeAreaGutter: {
-    backgroundColor: '#151425',
+    backgroundColor: '#0e1727',
     bottom: 0,
     elevation: 10,
     left: 0,
@@ -1505,18 +1866,30 @@ const styles = StyleSheet.create({
   campAvatar: {
     fontSize: 42,
   },
-  campFooter: {
-    backgroundColor: '#151425',
-    borderTopColor: '#3b344d',
+  safeActionFooter: {
+    backgroundColor: '#0e1727',
+    borderTopColor: '#9b7a32',
     borderTopWidth: 1,
     elevation: 8,
     paddingHorizontal: 18,
   },
+  abilityName: {
+    color: '#f5c24b',
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  abilityText: {
+    color: '#eadbb8',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 4,
+  },
   card: {
-    backgroundColor: '#211b33',
-    borderColor: '#4a405f',
+    backgroundColor: '#fff2cf',
+    borderColor: '#c3943d',
     borderRadius: 8,
-    borderWidth: 1,
+    borderWidth: 2,
     padding: 20,
     width: '100%',
   },
@@ -1530,7 +1903,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   combatName: {
-    color: '#f7e7bd',
+    color: '#fff1c8',
     fontSize: 15,
     fontWeight: '900',
     textAlign: 'center',
@@ -1542,25 +1915,76 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   combatSubtle: {
-    color: '#c8b899',
+    color: '#dac792',
     fontSize: 13,
     fontWeight: '700',
     textAlign: 'center',
   },
   combatant: {
     alignItems: 'center',
-    backgroundColor: '#2a2440',
-    borderColor: '#514a69',
+    backgroundColor: '#142238',
+    borderColor: '#7b6637',
     borderRadius: 8,
-    borderWidth: 1,
+    borderWidth: 2,
     flex: 1,
     gap: 4,
     minHeight: 126,
     justifyContent: 'center',
     padding: 10,
   },
+  classAbilityText: {
+    color: '#eadbb8',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  classChangePanel: {
+    backgroundColor: '#132036',
+    borderColor: '#8b713a',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 10,
+    padding: 14,
+  },
+  classPill: {
+    alignItems: 'center',
+    backgroundColor: '#1b2a42',
+    borderColor: '#6c5d35',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexGrow: 1,
+    minHeight: 42,
+    minWidth: '47%',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  classPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  classPillSelected: {
+    backgroundColor: '#293f63',
+    borderColor: '#f5c24b',
+  },
+  classPillText: {
+    color: '#f7e7bd',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  mageClassCard: {
+    borderColor: '#7c70c6',
+  },
+  knightClassCard: {
+    borderColor: '#d6a642',
+  },
+  rangerClassCard: {
+    borderColor: '#6f9d59',
+  },
+  rogueClassCard: {
+    borderColor: '#d98244',
+  },
   confirmBox: {
-    backgroundColor: '#332741',
+    backgroundColor: '#2a1d22',
     borderColor: '#d06b5f',
     borderRadius: 8,
     borderWidth: 1,
@@ -1575,8 +1999,8 @@ const styles = StyleSheet.create({
   },
   dangerButton: {
     alignItems: 'center',
-    backgroundColor: '#7f2e38',
-    borderColor: '#c65d68',
+    backgroundColor: '#8f3430',
+    borderColor: '#e18862',
     borderRadius: 8,
     borderWidth: 1,
     minHeight: 50,
@@ -1592,8 +2016,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#d86a5f',
   },
   devBox: {
-    backgroundColor: '#241f35',
-    borderColor: '#7d6f98',
+    backgroundColor: '#172235',
+    borderColor: '#806840',
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
@@ -1609,23 +2033,28 @@ const styles = StyleSheet.create({
   },
   dungeonHeader: {
     alignItems: 'center',
+    backgroundColor: '#111c2e',
+    borderColor: '#2e425f',
+    borderRadius: 8,
+    borderWidth: 1,
     gap: 4,
+    padding: 14,
   },
   emptyState: {
-    backgroundColor: '#211b33',
-    borderColor: '#4a405f',
+    backgroundColor: '#fff2cf',
+    borderColor: '#c3943d',
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
     padding: 16,
   },
   emptyText: {
-    color: '#d9ccb5',
+    color: '#263143',
     fontSize: 15,
     lineHeight: 22,
   },
   emptyTitle: {
-    color: '#f7e7bd',
+    color: '#10203a',
     fontSize: 19,
     fontWeight: '900',
   },
@@ -1635,7 +2064,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   eyebrow: {
-    color: '#f2c94c',
+    color: '#c28a20',
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0,
@@ -1649,16 +2078,16 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   headerSubtitle: {
-    color: '#d9ccb5',
+    color: '#eadbb8',
     fontSize: 18,
     fontWeight: '700',
   },
   heroCard: {
     alignItems: 'center',
-    backgroundColor: '#211b33',
-    borderColor: '#4a405f',
+    backgroundColor: '#132036',
+    borderColor: '#b98b37',
     borderRadius: 8,
-    borderWidth: 1,
+    borderWidth: 2,
     flexDirection: 'row',
     gap: 16,
     padding: 16,
@@ -1673,13 +2102,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   heroName: {
-    color: '#f7e7bd',
+    color: '#fff1c8',
     fontSize: 19,
     fontWeight: '800',
   },
   input: {
-    backgroundColor: '#f3e6c8',
-    borderColor: '#d2b978',
+    backgroundColor: '#fff4d7',
+    borderColor: '#c3943d',
     borderRadius: 8,
     borderWidth: 1,
     color: '#1f1a2d',
@@ -1702,21 +2131,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   logCard: {
-    backgroundColor: '#211b33',
-    borderColor: '#4a405f',
+    backgroundColor: '#fff2cf',
+    borderColor: '#c3943d',
     borderRadius: 8,
-    borderWidth: 1,
+    borderWidth: 2,
     gap: 10,
     padding: 16,
   },
   logDate: {
-    color: '#f2c94c',
+    color: '#936719',
     fontSize: 13,
     fontWeight: '900',
   },
   logField: {
-    backgroundColor: '#2a2440',
-    borderColor: '#514a69',
+    backgroundColor: '#f5dfac',
+    borderColor: '#d0a44c',
     borderRadius: 8,
     borderWidth: 1,
     flexGrow: 1,
@@ -1724,13 +2153,18 @@ const styles = StyleSheet.create({
     minWidth: '47%',
     padding: 10,
   },
+  logFieldLabel: {
+    color: '#745018',
+    fontSize: 13,
+    fontWeight: '800',
+  },
   logGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
   logValue: {
-    color: '#f7e7bd',
+    color: '#142033',
     fontSize: 15,
     fontWeight: '900',
   },
@@ -1742,26 +2176,26 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   note: {
-    backgroundColor: '#332741',
-    borderColor: '#806840',
+    backgroundColor: '#fff2cf',
+    borderColor: '#c3943d',
     borderRadius: 8,
-    borderWidth: 1,
+    borderWidth: 2,
     gap: 6,
     padding: 14,
   },
   noteLabel: {
-    color: '#f2c94c',
+    color: '#936719',
     fontSize: 13,
     fontWeight: '800',
   },
   noteText: {
-    color: '#efe1c2',
+    color: '#142033',
     fontSize: 15,
     lineHeight: 22,
   },
   noticeBox: {
-    backgroundColor: '#2f3045',
-    borderColor: '#f2c94c',
+    backgroundColor: '#142238',
+    borderColor: '#f5c24b',
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
@@ -1777,13 +2211,15 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   optionLabel: {
-    color: '#f7e7bd',
+    color: '#fff1c8',
     fontSize: 15,
     fontWeight: '900',
   },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: '#f2c94c',
+    backgroundColor: '#f5c24b',
+    borderColor: '#fff1a8',
+    borderWidth: 1,
     borderRadius: 8,
     marginTop: 12,
     minHeight: 52,
@@ -1801,33 +2237,52 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   progressTrack: {
-    backgroundColor: '#473c58',
+    backgroundColor: '#2b3b54',
     borderRadius: 999,
     height: 10,
     marginTop: 10,
     overflow: 'hidden',
   },
+  panelTitle: {
+    color: '#fff1c8',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  prepPanel: {
+    backgroundColor: '#132036',
+    borderColor: '#b98b37',
+    borderRadius: 8,
+    borderWidth: 2,
+    gap: 10,
+    padding: 14,
+  },
   questTitle: {
-    color: '#f7e7bd',
+    color: '#10203a',
     flexShrink: 1,
     fontSize: 22,
     fontWeight: '900',
     lineHeight: 28,
     marginTop: 8,
   },
+  dungeonQuestTitle: {
+    color: '#fff1c8',
+  },
+  dungeonWinCondition: {
+    color: '#eadbb8',
+  },
   resultLine: {
-    borderBottomColor: '#473c58',
+    borderBottomColor: '#d9bd77',
     borderBottomWidth: 1,
     gap: 4,
     paddingVertical: 8,
   },
   resultLineLabel: {
-    color: '#c8b899',
+    color: '#745018',
     fontSize: 13,
     fontWeight: '800',
   },
   resultLineValue: {
-    color: '#f7e7bd',
+    color: '#142033',
     fontSize: 16,
     fontWeight: '900',
   },
@@ -1835,34 +2290,51 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   resultOutcome: {
-    color: '#f2c94c',
+    color: '#10203a',
     fontSize: 30,
     fontWeight: '900',
     marginBottom: 10,
     textAlign: 'center',
   },
   abandonedResult: {
+    backgroundColor: '#fff1d2',
     borderColor: '#9d6a5d',
   },
   failedResult: {
+    backgroundColor: '#fff0e8',
     borderColor: '#d06b5f',
   },
   partialResult: {
+    backgroundColor: '#fff4d7',
     borderColor: '#806840',
   },
   victoryResult: {
-    borderColor: '#f2c94c',
+    backgroundColor: '#fff6d8',
+    borderColor: '#f5c24b',
   },
   roomCard: {
-    backgroundColor: '#211b33',
-    borderColor: '#4a405f',
+    backgroundColor: '#101a2b',
+    borderColor: '#3f5575',
     borderRadius: 8,
-    borderWidth: 1,
+    borderWidth: 2,
     gap: 18,
     padding: 16,
   },
+  roomDoor: {
+    alignItems: 'center',
+    backgroundColor: '#172640',
+    borderColor: '#b98b37',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingVertical: 9,
+  },
+  roomDoorText: {
+    color: '#f2c94c',
+    fontSize: 12,
+    fontWeight: '900',
+  },
   resetBox: {
-    backgroundColor: '#251d31',
+    backgroundColor: '#201e2a',
     borderColor: '#7f2e38',
     borderRadius: 8,
     borderWidth: 1,
@@ -1876,7 +2348,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   safeArea: {
-    backgroundColor: '#151425',
+    backgroundColor: '#0e1727',
     flex: 1,
   },
   screenStack: {
@@ -1893,8 +2365,8 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     alignItems: 'center',
-    backgroundColor: '#2b2440',
-    borderColor: '#695a83',
+    backgroundColor: '#1c2b43',
+    borderColor: '#7d6a38',
     borderRadius: 8,
     borderWidth: 1,
     minHeight: 50,
@@ -1906,10 +2378,37 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
+  sceneBanner: {
+    alignItems: 'center',
+    backgroundColor: '#fff2cf',
+    borderColor: '#c3943d',
+    borderRadius: 8,
+    borderWidth: 2,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 14,
+  },
+  sceneCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  sceneIcon: {
+    fontSize: 30,
+  },
+  sceneText: {
+    color: '#263143',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  sceneTitle: {
+    color: '#10203a',
+    fontSize: 17,
+    fontWeight: '900',
+  },
   segmentButton: {
     alignItems: 'center',
-    backgroundColor: '#2a2440',
-    borderColor: '#514a69',
+    backgroundColor: '#1b2a42',
+    borderColor: '#6c5d35',
     borderRadius: 8,
     borderWidth: 1,
     flex: 1,
@@ -1919,8 +2418,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   segmentButtonSelected: {
-    backgroundColor: '#443164',
-    borderColor: '#f2c94c',
+    backgroundColor: '#b98b37',
+    borderColor: '#f5c24b',
   },
   segmentRow: {
     flexDirection: 'row',
@@ -1928,19 +2427,19 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   segmentText: {
-    color: '#d9ccb5',
+    color: '#eadbb8',
     fontSize: 14,
     fontWeight: '800',
     textAlign: 'center',
   },
   segmentTextSelected: {
-    color: '#f7e7bd',
+    color: '#10203a',
   },
   statCard: {
-    backgroundColor: '#211b33',
-    borderColor: '#4a405f',
+    backgroundColor: '#172640',
+    borderColor: '#7b6637',
     borderRadius: 8,
-    borderWidth: 1,
+    borderWidth: 2,
     flexGrow: 1,
     gap: 5,
     minWidth: '47%',
@@ -1952,31 +2451,58 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   statLabel: {
-    color: '#c8b899',
+    color: '#dac792',
     fontSize: 13,
     fontWeight: '700',
   },
   statLine: {
-    color: '#d9ccb5',
+    color: '#eadbb8',
     fontSize: 15,
     fontWeight: '700',
   },
   statValue: {
-    color: '#f7e7bd',
+    color: '#fff1c8',
     fontSize: 18,
     fontWeight: '900',
+  },
+  subtleText: {
+    color: '#dac792',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  templateChip: {
+    alignItems: 'center',
+    backgroundColor: '#fff2cf',
+    borderColor: '#c3943d',
+    borderRadius: 8,
+    borderWidth: 2,
+    minHeight: 38,
+    minWidth: '47%',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  templateGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  templateText: {
+    color: '#142033',
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   textArea: {
     minHeight: 92,
     textAlignVertical: 'top',
   },
   timerText: {
-    color: '#f7e7bd',
+    color: '#fff1c8',
     fontSize: 58,
     fontWeight: '900',
   },
   title: {
-    color: '#f7e7bd',
+    color: '#10203a',
     fontSize: 29,
     fontWeight: '900',
     lineHeight: 35,
@@ -1989,20 +2515,20 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   upgradeCard: {
-    backgroundColor: '#211b33',
-    borderColor: '#4a405f',
+    backgroundColor: '#fff2cf',
+    borderColor: '#c3943d',
     borderRadius: 8,
-    borderWidth: 1,
+    borderWidth: 2,
     gap: 12,
     padding: 16,
   },
   upgradeCost: {
-    color: '#f2c94c',
+    color: '#936719',
     fontSize: 16,
     fontWeight: '900',
   },
   upgradeEffect: {
-    color: '#d9ccb5',
+    color: '#263143',
     fontSize: 14,
     lineHeight: 20,
   },
@@ -2017,8 +2543,13 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 12,
   },
+  upgradeMetaText: {
+    color: '#745018',
+    fontSize: 13,
+    fontWeight: '800',
+  },
   upgradeName: {
-    color: '#f7e7bd',
+    color: '#10203a',
     fontSize: 20,
     fontWeight: '900',
   },
@@ -2035,7 +2566,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   winCondition: {
-    color: '#d9ccb5',
+    color: '#2b3547',
     flexShrink: 1,
     fontSize: 16,
     lineHeight: 23,
