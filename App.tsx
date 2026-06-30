@@ -10,6 +10,8 @@ import {
 } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
+  Image,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -17,6 +19,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -135,6 +138,26 @@ const SESSION_STORAGE_KEY = 'deepWorkDungeon:sessions';
 const roomsPerFloor = 5;
 const reviewCooldownDays = 45;
 const maxReviewPrompts = 3;
+const dungeonRoomBackground = require('./assets/art/dungeon-run/dungeon_room_bg.png');
+const heroKnightSprite = require('./assets/art/dungeon-run/hero_knight.png');
+const roomWardenSprite = require('./assets/art/dungeon-run/enemy_room_warden.png');
+const questPlaqueFrame = require('./assets/art/dungeon-run/ui_quest_plaque.png');
+const timerPlaqueFrame = require('./assets/art/dungeon-run/ui_timer_plaque.png');
+const hpFrame = require('./assets/art/dungeon-run/ui_hp_frame.png');
+const focusFrame = require('./assets/art/dungeon-run/ui_focus_frame.png');
+const abandonFrame = require('./assets/art/dungeon-run/ui_abandon_frame.png');
+const questPlaqueAspectRatio = 814 / 277;
+const timerPlaqueAspectRatio = 668 / 282;
+const hpFrameAspectRatio = 799 / 112;
+const focusFrameAspectRatio = 791 / 235;
+const abandonFrameAspectRatio = 671 / 288;
+const questPlaqueTextInset = { left: '11%', right: '11%', top: '31%', bottom: '15%' } as const;
+const timerPlaqueTextInset = { left: '12%', right: '12%', top: '13%', bottom: '12%' } as const;
+const hpHeaderInset = { left: '12%', right: '11%', top: '36%' } as const;
+const hpFillInset = { left: '11%', right: '10%', bottom: '18%', height: '16%' } as const;
+const focusHeaderInset = { left: '11%', right: '11%', top: '31%' } as const;
+const focusFillInset = { left: '10%', right: '10%', bottom: '24%', height: '15%' } as const;
+const abandonTextInset = { left: '18%', right: '18%', top: '39%', bottom: '28%' } as const;
 
 const vagueQuestTitles = new Set([
   'work',
@@ -310,6 +333,7 @@ export default function App() {
 
 function DungeonApp() {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const [userState, setUserState] = useState<UserState>(defaultUserState);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [screen, setScreen] = useState<Screen>('concept');
@@ -370,6 +394,17 @@ function DungeonApp() {
   const enemyHp = Math.max(0, Math.ceil(100 - runProgress * 100));
   const focusPercent = Math.min(100, Math.round(runProgress * 100));
   const activeClass = classDefinitions[userState.heroClass ?? 'Knight'];
+  const dungeonRunHeight = Math.max(700, windowHeight - insets.top);
+  const heroSpriteHeight = Math.min(dungeonRunHeight * 0.207, Math.max(dungeonRunHeight * 0.189, 135));
+  const enemySpriteHeight = Math.min(dungeonRunHeight * 0.288, Math.max(dungeonRunHeight * 0.261, 189));
+  const heroSpriteWidth = heroSpriteHeight * (874 / 1022);
+  const enemySpriteWidth = enemySpriteHeight * (1076 / 1258);
+  const dungeonSafeSide = windowWidth * 0.07;
+  const heroSpriteLeft = Math.max(dungeonSafeSide, windowWidth * 0.315 - heroSpriteWidth / 2);
+  const enemySpriteLeft = Math.min(
+    windowWidth - dungeonSafeSide - enemySpriteWidth,
+    windowWidth * 0.685 - enemySpriteWidth / 2,
+  );
 
   async function loadPersistedState() {
     try {
@@ -707,6 +742,7 @@ function DungeonApp() {
           key={screen}
           contentContainerStyle={[
             styles.scrollContent,
+            screen === 'dungeonRun' && styles.dungeonRunScrollContent,
             {
               paddingBottom: scrollBottomSpacer,
             },
@@ -960,7 +996,165 @@ function DungeonApp() {
           )}
 
           {screen === 'dungeonRun' && activeQuest && (
-            <View style={styles.screenStack}>
+            <>
+            <View style={[styles.dungeonRunScreen, { minHeight: dungeonRunHeight }]}>
+              <ImageBackground
+                source={dungeonRoomBackground}
+                resizeMode="cover"
+                style={styles.dungeonRunBackground}
+              >
+                <View
+                  style={[
+                    styles.dungeonRunShade,
+                    {
+                      paddingBottom: insets.bottom + 18,
+                    },
+                  ]}
+                >
+                  <View style={styles.dungeonTopStack}>
+                    <View style={styles.questPlaque}>
+                      <Image
+                        source={questPlaqueFrame}
+                        resizeMode="stretch"
+                        style={styles.dungeonFrameImage}
+                      />
+                      <View style={styles.questPlaqueTextLayer}>
+                        <Text numberOfLines={2} style={styles.dungeonPlaqueTitle}>
+                          {activeQuest.title}
+                        </Text>
+                        <Text numberOfLines={2} style={styles.dungeonPlaqueSubtext}>
+                          {activeQuest.winCondition}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.timerPlaque}>
+                      <Image
+                        source={timerPlaqueFrame}
+                        resizeMode="stretch"
+                        style={styles.dungeonFrameImage}
+                      />
+                      <View style={styles.timerPlaqueTextLayer}>
+                        <Text style={styles.timerLabel}>Focus Session</Text>
+                        <Text style={styles.dungeonTimerText}>{formatTime(secondsRemaining)}</Text>
+                        <Text style={styles.timerSubtext}>{activeQuest.difficulty} room - no pause</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.battleStage}>
+                    <Image
+                      resizeMode="contain"
+                      source={heroKnightSprite}
+                      style={[
+                        styles.heroSprite,
+                        {
+                          height: heroSpriteHeight,
+                          left: heroSpriteLeft,
+                          width: heroSpriteWidth,
+                        },
+                      ]}
+                    />
+                    <Image
+                      resizeMode="contain"
+                      source={roomWardenSprite}
+                      style={[
+                        styles.enemySprite,
+                        {
+                          height: enemySpriteHeight,
+                          left: enemySpriteLeft,
+                          width: enemySpriteWidth,
+                        },
+                      ]}
+                    />
+
+                    <View style={styles.enemyHpGroup}>
+                      <Text style={styles.enemyName}>Room Warden</Text>
+                      <View style={styles.enemyStatusPanel}>
+                        <Image
+                          source={hpFrame}
+                          resizeMode="stretch"
+                          style={styles.dungeonFrameImage}
+                        />
+                        <View style={styles.enemyHpHeader}>
+                          <Text style={styles.enemyHpLabel}>HP</Text>
+                          <Text style={styles.enemyHpValue}>{enemyHp} / 100</Text>
+                        </View>
+                        <View style={styles.hpMeterClip}>
+                          <View style={[styles.enemyHpFill, { width: `${enemyHp}%` }]} />
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.dungeonBottomStack}>
+                    <View style={styles.focusPanel}>
+                      <Image
+                        source={focusFrame}
+                        resizeMode="stretch"
+                        style={styles.dungeonFrameImage}
+                      />
+                      <View style={styles.focusHeader}>
+                        <Text style={styles.focusLabel}>Focus Meter</Text>
+                        <Text style={styles.focusValue}>{focusPercent}%</Text>
+                      </View>
+                      <View style={styles.focusMeterClip}>
+                        <View style={[styles.focusMeterFill, { width: `${focusPercent}%` }]} />
+                      </View>
+                    </View>
+
+                    {showAbandonConfirm ? (
+                      <View style={styles.dungeonConfirmPanel}>
+                        <Text style={styles.dungeonConfirmText}>
+                          Abandon this run? Your hero takes damage and the room is not cleared.
+                        </Text>
+                        <View style={styles.dungeonConfirmActions}>
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={() => setShowAbandonConfirm(false)}
+                            style={({ pressed }) => [
+                              styles.keepFightingButton,
+                              pressed && styles.buttonPressed,
+                            ]}
+                          >
+                            <Text style={styles.keepFightingText}>Keep Fighting</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={abandonRun}
+                            style={({ pressed }) => [
+                              styles.dungeonAbandonButton,
+                              pressed && styles.buttonPressed,
+                            ]}
+                          >
+                            <Text style={styles.dungeonAbandonText}>Abandon</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ) : (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => setShowAbandonConfirm(true)}
+                        style={({ pressed }) => [
+                          styles.dungeonAbandonPressable,
+                          pressed && styles.buttonPressed,
+                        ]}
+                      >
+                        <View style={styles.dungeonAbandonFrame}>
+                          <Image
+                            source={abandonFrame}
+                            resizeMode="stretch"
+                            style={styles.dungeonFrameImage}
+                          />
+                          <Text style={styles.dungeonAbandonFrameText}>Abandon Run</Text>
+                        </View>
+                      </Pressable>
+                    )}
+                  </View>
+                </View>
+              </ImageBackground>
+            </View>
+            <View style={[styles.screenStack, styles.hiddenDungeonLegacy]}>
               <View style={styles.dungeonHeader}>
                 <Text style={styles.headerSubtitle}>Dungeon Run</Text>
                 <Text style={styles.timerText}>{formatTime(secondsRemaining)}</Text>
@@ -1013,6 +1207,7 @@ function DungeonApp() {
                 <DangerButton label="Abandon Run" onPress={() => setShowAbandonConfirm(true)} />
               )}
             </View>
+            </>
           )}
 
           {screen === 'roomResult' && activeQuest && (
@@ -2039,6 +2234,274 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 4,
     padding: 14,
+  },
+  dungeonAbandonButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#8f1f25',
+    borderColor: '#f1a06d',
+    borderRadius: 10,
+    borderWidth: 2,
+    elevation: 8,
+    justifyContent: 'center',
+    minHeight: 54,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    width: '100%',
+  },
+  dungeonAbandonFrame: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  dungeonAbandonPressable: {
+    alignSelf: 'center',
+    aspectRatio: abandonFrameAspectRatio,
+    width: '68%',
+  },
+  dungeonAbandonText: {
+    color: '#fff3df',
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  dungeonAbandonFrameText: {
+    color: '#fff3df',
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    position: 'absolute',
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    ...abandonTextInset,
+  },
+  dungeonConfirmActions: {
+    gap: 10,
+  },
+  dungeonConfirmPanel: {
+    backgroundColor: 'rgba(17, 13, 17, 0.9)',
+    borderColor: '#c79b52',
+    borderRadius: 12,
+    borderWidth: 2,
+    gap: 12,
+    padding: 12,
+    width: '100%',
+  },
+  dungeonConfirmText: {
+    color: '#f7e7bd',
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  dungeonPlaqueSubtext: {
+    color: '#d8c59b',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+  dungeonPlaqueTitle: {
+    color: '#fff0bc',
+    fontSize: 19,
+    fontWeight: '900',
+    lineHeight: 24,
+    textAlign: 'center',
+  },
+  dungeonRunBackground: {
+    flex: 1,
+    width: '100%',
+  },
+  dungeonRunScreen: {
+    backgroundColor: '#060912',
+    width: '100%',
+  },
+  dungeonRunScrollContent: {
+    paddingHorizontal: 0,
+    paddingTop: 0,
+  },
+  dungeonRunShade: {
+    backgroundColor: 'rgba(4, 7, 13, 0.16)',
+    flex: 1,
+    justifyContent: 'space-between',
+    paddingTop: 12,
+  },
+  dungeonBottomStack: {
+    alignSelf: 'center',
+    gap: 7,
+    width: '86%',
+  },
+  dungeonFrameImage: {
+    ...StyleSheet.absoluteFill,
+    height: '100%',
+    width: '100%',
+  },
+  dungeonTopStack: {
+    alignSelf: 'center',
+    alignItems: 'center',
+    gap: 4,
+    width: '86%',
+  },
+  dungeonTimerText: {
+    color: '#ffd76a',
+    fontSize: 50,
+    fontWeight: '900',
+    lineHeight: 54,
+    textAlign: 'center',
+    textShadowColor: '#4b2508',
+    textShadowOffset: { width: 0, height: 3 },
+    textShadowRadius: 5,
+  },
+  enemyHpFill: {
+    backgroundColor: '#c82432',
+    height: '100%',
+  },
+  enemyHpHeader: {
+    position: 'absolute',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    ...hpHeaderInset,
+  },
+  enemyHpLabel: {
+    color: '#f4c872',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  enemyHpValue: {
+    color: '#fff0cf',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  enemyHpGroup: {
+    alignItems: 'center',
+    position: 'absolute',
+    right: '8%',
+    top: 38,
+    width: '54%',
+  },
+  enemyName: {
+    color: '#fff0cf',
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 1,
+    textAlign: 'center',
+    textShadowColor: '#140b08',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  enemySprite: {
+    bottom: 0,
+    position: 'absolute',
+  },
+  enemyStatusPanel: {
+    aspectRatio: hpFrameAspectRatio,
+    width: '100%',
+  },
+  focusHeader: {
+    position: 'absolute',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    ...focusHeaderInset,
+  },
+  focusLabel: {
+    color: '#ecddba',
+    fontSize: 13,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  focusMeterFill: {
+    backgroundColor: '#38d6f6',
+    height: '100%',
+  },
+  focusPanel: {
+    alignSelf: 'center',
+    aspectRatio: focusFrameAspectRatio,
+    width: '76%',
+  },
+  focusValue: {
+    color: '#a5f2ff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  heroSprite: {
+    bottom: 0,
+    position: 'absolute',
+  },
+  hiddenDungeonLegacy: {
+    display: 'none',
+  },
+  keepFightingButton: {
+    alignItems: 'center',
+    backgroundColor: '#22364e',
+    borderColor: '#83b6c2',
+    borderRadius: 10,
+    borderWidth: 2,
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  keepFightingText: {
+    color: '#e7fbff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  questPlaque: {
+    alignSelf: 'center',
+    aspectRatio: questPlaqueAspectRatio,
+    width: '84%',
+  },
+  questPlaqueTextLayer: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...questPlaqueTextInset,
+  },
+  timerLabel: {
+    color: '#ecddba',
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  timerPlaque: {
+    alignSelf: 'center',
+    aspectRatio: timerPlaqueAspectRatio,
+    width: '66%',
+  },
+  timerPlaqueTextLayer: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...timerPlaqueTextInset,
+  },
+  timerSubtext: {
+    color: '#d9c693',
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  battleStage: {
+    flex: 1,
+    marginVertical: 0,
+    minHeight: 245,
+    position: 'relative',
+    width: '100%',
+  },
+  hpMeterClip: {
+    backgroundColor: 'rgba(20, 6, 8, 0.8)',
+    borderRadius: 999,
+    overflow: 'hidden',
+    position: 'absolute',
+    ...hpFillInset,
+  },
+  focusMeterClip: {
+    backgroundColor: 'rgba(7, 15, 24, 0.82)',
+    borderRadius: 999,
+    overflow: 'hidden',
+    position: 'absolute',
+    ...focusFillInset,
   },
   emptyState: {
     backgroundColor: '#fff2cf',
