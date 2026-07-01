@@ -146,18 +146,104 @@ const timerPlaqueFrame = require('./assets/art/dungeon-run/ui_timer_plaque.png')
 const hpFrame = require('./assets/art/dungeon-run/ui_hp_frame.png');
 const focusFrame = require('./assets/art/dungeon-run/ui_focus_frame.png');
 const abandonFrame = require('./assets/art/dungeon-run/ui_abandon_frame.png');
-const questPlaqueAspectRatio = 814 / 277;
-const timerPlaqueAspectRatio = 668 / 282;
-const hpFrameAspectRatio = 799 / 112;
-const focusFrameAspectRatio = 791 / 235;
-const abandonFrameAspectRatio = 671 / 288;
-const questPlaqueTextInset = { left: '11%', right: '11%', top: '31%', bottom: '15%' } as const;
-const timerPlaqueTextInset = { left: '12%', right: '12%', top: '13%', bottom: '12%' } as const;
-const hpHeaderInset = { left: '12%', right: '11%', top: '36%' } as const;
-const hpFillInset = { left: '11%', right: '10%', bottom: '18%', height: '16%' } as const;
-const focusHeaderInset = { left: '11%', right: '11%', top: '31%' } as const;
-const focusFillInset = { left: '10%', right: '10%', bottom: '24%', height: '15%' } as const;
-const abandonTextInset = { left: '18%', right: '18%', top: '39%', bottom: '28%' } as const;
+
+// Dungeon Run tuning guide:
+// centerXPct controls horizontal placement, heightPct controls rendered sprite size,
+// baselinePct/sharedFloorBaselinePx controls floor alignment, textOffsetYPx controls
+// optical text centering, and visualOffsetXPct compensates for transparent PNG padding.
+const DUNGEON_RUN_LAYOUT = {
+  stage: {
+    minHeightPx: 700,
+    safeSidePct: 0.07,
+    contentWidthPct: '86%',
+    shadePaddingTopPx: 12,
+    shadeBottomBreathingRoomPx: 18,
+  },
+  topStack: {
+    gapPx: 4,
+  },
+  bottomStack: {
+    gapPx: 7,
+  },
+  battleStage: {
+    minHeightPx: 245,
+  },
+  questPlaque: {
+    aspectRatio: 814 / 277,
+    widthPct: '84%',
+    position: 'topStack',
+    textInset: { left: '11%', right: '11%', top: '31%', bottom: '15%' },
+    textOffsetYPx: 0,
+  },
+  timerPlaque: {
+    aspectRatio: 668 / 282,
+    widthPct: '66%',
+    position: 'belowQuestPlaque',
+    textInset: { left: '12%', right: '12%', top: '13%', bottom: '12%' },
+    labelOffsetYPx: 0,
+    valueOffsetYPx: 0,
+    subtitleOffsetYPx: 0,
+  },
+  wardenName: {
+    topPx: 38,
+    rightPct: '8%',
+    widthPct: '54%',
+    textOffsetYPx: 0,
+  },
+  hpFrame: {
+    aspectRatio: 799 / 112,
+    widthPct: '100%',
+    headerInset: { left: '12%', right: '11%', top: '36%' },
+    fillInset: { left: '11%', right: '10%', bottom: '18%', height: '16%' },
+    valueTextPosition: 'headerRight',
+  },
+  sprites: {
+    sharedFloorBaselinePx: 0,
+    sharedFloorBaselinePct: 0,
+  },
+  focusMeter: {
+    aspectRatio: 791 / 235,
+    widthPct: '76%',
+    position: 'bottomStack',
+    headerInset: { left: '11%', right: '11%', top: '31%' },
+    fillInset: { left: '10%', right: '10%', bottom: '24%', height: '15%' },
+  },
+  abandonButton: {
+    aspectRatio: 671 / 288,
+    widthPct: '68%',
+    position: 'bottomStack',
+    textInset: { left: '18%', right: '18%', top: '39%', bottom: '28%' },
+    textOffsetYPx: 0,
+  },
+} as const;
+
+const HERO_SPRITE_LAYOUTS = {
+  Knight: {
+    image: heroKnightSprite,
+    aspectRatio: 874 / 1022,
+    heightPctMin: 0.175,
+    heightPctMax: 0.192,
+    minHeightPx: 126,
+    centerXPct: 0.285,
+    baselineOffsetPx: 0,
+    visualOffsetXPct: 0,
+    notes: 'Tune centerXPct to move the knight horizontally; tune heightPctMin/Max to resize.',
+  },
+} as const;
+
+const ENEMY_SPRITE_LAYOUTS = {
+  RoomWarden: {
+    image: roomWardenSprite,
+    aspectRatio: 1076 / 1258,
+    heightPctMin: 0.242,
+    heightPctMax: 0.267,
+    minHeightPx: 174,
+    centerXPct: 0.715,
+    baselineOffsetPx: 0,
+    visualOffsetXPct: 0,
+    notes: 'Tune centerXPct to move the Warden horizontally; keep enough width for the weapon.',
+  },
+} as const;
 
 const vagueQuestTitles = new Set([
   'work',
@@ -394,17 +480,34 @@ function DungeonApp() {
   const enemyHp = Math.max(0, Math.ceil(100 - runProgress * 100));
   const focusPercent = Math.min(100, Math.round(runProgress * 100));
   const activeClass = classDefinitions[userState.heroClass ?? 'Knight'];
-  const dungeonRunHeight = Math.max(700, windowHeight - insets.top);
-  const heroSpriteHeight = Math.min(dungeonRunHeight * 0.207, Math.max(dungeonRunHeight * 0.189, 135));
-  const enemySpriteHeight = Math.min(dungeonRunHeight * 0.288, Math.max(dungeonRunHeight * 0.261, 189));
-  const heroSpriteWidth = heroSpriteHeight * (874 / 1022);
-  const enemySpriteWidth = enemySpriteHeight * (1076 / 1258);
-  const dungeonSafeSide = windowWidth * 0.07;
-  const heroSpriteLeft = Math.max(dungeonSafeSide, windowWidth * 0.315 - heroSpriteWidth / 2);
+  const heroSpriteLayout = HERO_SPRITE_LAYOUTS.Knight;
+  const enemySpriteLayout = ENEMY_SPRITE_LAYOUTS.RoomWarden;
+  const dungeonRunHeight = Math.max(
+    DUNGEON_RUN_LAYOUT.stage.minHeightPx,
+    windowHeight - insets.top,
+  );
+  const heroSpriteHeight = Math.min(
+    dungeonRunHeight * heroSpriteLayout.heightPctMax,
+    Math.max(dungeonRunHeight * heroSpriteLayout.heightPctMin, heroSpriteLayout.minHeightPx),
+  );
+  const enemySpriteHeight = Math.min(
+    dungeonRunHeight * enemySpriteLayout.heightPctMax,
+    Math.max(dungeonRunHeight * enemySpriteLayout.heightPctMin, enemySpriteLayout.minHeightPx),
+  );
+  const heroSpriteWidth = heroSpriteHeight * heroSpriteLayout.aspectRatio;
+  const enemySpriteWidth = enemySpriteHeight * enemySpriteLayout.aspectRatio;
+  const dungeonSafeSide = windowWidth * DUNGEON_RUN_LAYOUT.stage.safeSidePct;
+  const heroSpriteLeft = Math.max(
+    dungeonSafeSide,
+    windowWidth * (heroSpriteLayout.centerXPct + heroSpriteLayout.visualOffsetXPct) -
+      heroSpriteWidth / 2,
+  );
   const enemySpriteLeft = Math.min(
     windowWidth - dungeonSafeSide - enemySpriteWidth,
-    windowWidth * 0.685 - enemySpriteWidth / 2,
+    windowWidth * (enemySpriteLayout.centerXPct + enemySpriteLayout.visualOffsetXPct) -
+      enemySpriteWidth / 2,
   );
+  const spriteFloorBaselinePx = DUNGEON_RUN_LAYOUT.sprites.sharedFloorBaselinePx;
 
   async function loadPersistedState() {
     try {
@@ -1007,7 +1110,8 @@ function DungeonApp() {
                   style={[
                     styles.dungeonRunShade,
                     {
-                      paddingBottom: insets.bottom + 18,
+                      paddingBottom:
+                        insets.bottom + DUNGEON_RUN_LAYOUT.stage.shadeBottomBreathingRoomPx,
                     },
                   ]}
                 >
@@ -1045,10 +1149,11 @@ function DungeonApp() {
                   <View style={styles.battleStage}>
                     <Image
                       resizeMode="contain"
-                      source={heroKnightSprite}
-                      style={[
-                        styles.heroSprite,
-                        {
+                      source={heroSpriteLayout.image}
+                        style={[
+                          styles.heroSprite,
+                          {
+                          bottom: spriteFloorBaselinePx + heroSpriteLayout.baselineOffsetPx,
                           height: heroSpriteHeight,
                           left: heroSpriteLeft,
                           width: heroSpriteWidth,
@@ -1057,10 +1162,11 @@ function DungeonApp() {
                     />
                     <Image
                       resizeMode="contain"
-                      source={roomWardenSprite}
-                      style={[
-                        styles.enemySprite,
-                        {
+                      source={enemySpriteLayout.image}
+                        style={[
+                          styles.enemySprite,
+                          {
+                          bottom: spriteFloorBaselinePx + enemySpriteLayout.baselineOffsetPx,
                           height: enemySpriteHeight,
                           left: enemySpriteLeft,
                           width: enemySpriteWidth,
@@ -2257,8 +2363,8 @@ const styles = StyleSheet.create({
   },
   dungeonAbandonPressable: {
     alignSelf: 'center',
-    aspectRatio: abandonFrameAspectRatio,
-    width: '68%',
+    aspectRatio: DUNGEON_RUN_LAYOUT.abandonButton.aspectRatio,
+    width: DUNGEON_RUN_LAYOUT.abandonButton.widthPct,
   },
   dungeonAbandonText: {
     color: '#fff3df',
@@ -2276,7 +2382,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     textAlign: 'center',
     textTransform: 'uppercase',
-    ...abandonTextInset,
+    transform: [{ translateY: DUNGEON_RUN_LAYOUT.abandonButton.textOffsetYPx }],
+    ...DUNGEON_RUN_LAYOUT.abandonButton.textInset,
   },
   dungeonConfirmActions: {
     gap: 10,
@@ -2327,12 +2434,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(4, 7, 13, 0.16)',
     flex: 1,
     justifyContent: 'space-between',
-    paddingTop: 12,
+    paddingTop: DUNGEON_RUN_LAYOUT.stage.shadePaddingTopPx,
   },
   dungeonBottomStack: {
     alignSelf: 'center',
-    gap: 7,
-    width: '86%',
+    gap: DUNGEON_RUN_LAYOUT.bottomStack.gapPx,
+    width: DUNGEON_RUN_LAYOUT.stage.contentWidthPct,
   },
   dungeonFrameImage: {
     ...StyleSheet.absoluteFill,
@@ -2342,8 +2449,8 @@ const styles = StyleSheet.create({
   dungeonTopStack: {
     alignSelf: 'center',
     alignItems: 'center',
-    gap: 4,
-    width: '86%',
+    gap: DUNGEON_RUN_LAYOUT.topStack.gapPx,
+    width: DUNGEON_RUN_LAYOUT.stage.contentWidthPct,
   },
   dungeonTimerText: {
     color: '#ffd76a',
@@ -2354,6 +2461,7 @@ const styles = StyleSheet.create({
     textShadowColor: '#4b2508',
     textShadowOffset: { width: 0, height: 3 },
     textShadowRadius: 5,
+    transform: [{ translateY: DUNGEON_RUN_LAYOUT.timerPlaque.valueOffsetYPx }],
   },
   enemyHpFill: {
     backgroundColor: '#c82432',
@@ -2363,7 +2471,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    ...hpHeaderInset,
+    ...DUNGEON_RUN_LAYOUT.hpFrame.headerInset,
   },
   enemyHpLabel: {
     color: '#f4c872',
@@ -2378,9 +2486,9 @@ const styles = StyleSheet.create({
   enemyHpGroup: {
     alignItems: 'center',
     position: 'absolute',
-    right: '8%',
-    top: 38,
-    width: '54%',
+    right: DUNGEON_RUN_LAYOUT.wardenName.rightPct,
+    top: DUNGEON_RUN_LAYOUT.wardenName.topPx,
+    width: DUNGEON_RUN_LAYOUT.wardenName.widthPct,
   },
   enemyName: {
     color: '#fff0cf',
@@ -2391,20 +2499,20 @@ const styles = StyleSheet.create({
     textShadowColor: '#140b08',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 4,
+    transform: [{ translateY: DUNGEON_RUN_LAYOUT.wardenName.textOffsetYPx }],
   },
   enemySprite: {
-    bottom: 0,
     position: 'absolute',
   },
   enemyStatusPanel: {
-    aspectRatio: hpFrameAspectRatio,
-    width: '100%',
+    aspectRatio: DUNGEON_RUN_LAYOUT.hpFrame.aspectRatio,
+    width: DUNGEON_RUN_LAYOUT.hpFrame.widthPct,
   },
   focusHeader: {
     position: 'absolute',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    ...focusHeaderInset,
+    ...DUNGEON_RUN_LAYOUT.focusMeter.headerInset,
   },
   focusLabel: {
     color: '#ecddba',
@@ -2418,8 +2526,8 @@ const styles = StyleSheet.create({
   },
   focusPanel: {
     alignSelf: 'center',
-    aspectRatio: focusFrameAspectRatio,
-    width: '76%',
+    aspectRatio: DUNGEON_RUN_LAYOUT.focusMeter.aspectRatio,
+    width: DUNGEON_RUN_LAYOUT.focusMeter.widthPct,
   },
   focusValue: {
     color: '#a5f2ff',
@@ -2427,7 +2535,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   heroSprite: {
-    bottom: 0,
     position: 'absolute',
   },
   hiddenDungeonLegacy: {
@@ -2449,14 +2556,15 @@ const styles = StyleSheet.create({
   },
   questPlaque: {
     alignSelf: 'center',
-    aspectRatio: questPlaqueAspectRatio,
-    width: '84%',
+    aspectRatio: DUNGEON_RUN_LAYOUT.questPlaque.aspectRatio,
+    width: DUNGEON_RUN_LAYOUT.questPlaque.widthPct,
   },
   questPlaqueTextLayer: {
     ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
-    ...questPlaqueTextInset,
+    transform: [{ translateY: DUNGEON_RUN_LAYOUT.questPlaque.textOffsetYPx }],
+    ...DUNGEON_RUN_LAYOUT.questPlaque.textInset,
   },
   timerLabel: {
     color: '#ecddba',
@@ -2464,28 +2572,30 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textAlign: 'center',
     textTransform: 'uppercase',
+    transform: [{ translateY: DUNGEON_RUN_LAYOUT.timerPlaque.labelOffsetYPx }],
   },
   timerPlaque: {
     alignSelf: 'center',
-    aspectRatio: timerPlaqueAspectRatio,
-    width: '66%',
+    aspectRatio: DUNGEON_RUN_LAYOUT.timerPlaque.aspectRatio,
+    width: DUNGEON_RUN_LAYOUT.timerPlaque.widthPct,
   },
   timerPlaqueTextLayer: {
     ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
-    ...timerPlaqueTextInset,
+    ...DUNGEON_RUN_LAYOUT.timerPlaque.textInset,
   },
   timerSubtext: {
     color: '#d9c693',
     fontSize: 12,
     fontWeight: '800',
     textAlign: 'center',
+    transform: [{ translateY: DUNGEON_RUN_LAYOUT.timerPlaque.subtitleOffsetYPx }],
   },
   battleStage: {
     flex: 1,
     marginVertical: 0,
-    minHeight: 245,
+    minHeight: DUNGEON_RUN_LAYOUT.battleStage.minHeightPx,
     position: 'relative',
     width: '100%',
   },
@@ -2494,14 +2604,14 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: 'hidden',
     position: 'absolute',
-    ...hpFillInset,
+    ...DUNGEON_RUN_LAYOUT.hpFrame.fillInset,
   },
   focusMeterClip: {
     backgroundColor: 'rgba(7, 15, 24, 0.82)',
     borderRadius: 999,
     overflow: 'hidden',
     position: 'absolute',
-    ...focusFillInset,
+    ...DUNGEON_RUN_LAYOUT.focusMeter.fillInset,
   },
   emptyState: {
     backgroundColor: '#fff2cf',
